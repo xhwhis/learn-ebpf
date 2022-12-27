@@ -14,14 +14,14 @@ use memoffset::offset_of;
 use xdp_common::PacketLog;
 
 mod bindings;
-use bindings::{ethhdr, iphdr};
+use bindings::{ethhdr, iphdr, tcphdr, udphdr};
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
 
-#[map(name = "EVENTS")] //
+#[map(name = "EVENTS")]
 static mut EVENTS: PerfEventArray<PacketLog> =
     PerfEventArray::<PacketLog>::with_max_entries(1024, 0);
 
@@ -33,7 +33,7 @@ pub fn xdp_firewall(ctx: XdpContext) -> u32 {
     }
 }
 
-#[inline(always)] //
+#[inline(always)]
 unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
     let start = ctx.data();
     let end = ctx.data_end();
@@ -47,25 +47,63 @@ unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
 }
 
 fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
-    let h_proto = u16::from_be(unsafe {
-        *ptr_at(&ctx, offset_of!(ethhdr, h_proto))? //
-    });
-    if h_proto != ETH_P_IP {
+    let eth_type = u16::from_be(unsafe { *ptr_at(&ctx, offset_of!(ethhdr, h_proto))? });
+    if eth_type != ETH_P_IP {
         return Ok(xdp_action::XDP_PASS);
     }
-    let source = u32::from_be(unsafe {
-        *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))?
-    });
+    let src_addr = u32::from_be(unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? });
+    let dst_addr = u32::from_be(unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
 
-    let log_entry = PacketLog {
-        ipv4_address: source,
-        action: xdp_action::XDP_PASS,
-    };
-    unsafe {
-        EVENTS.output(&ctx, &log_entry, 0); //
+    let protocol =
+        u8::from_be(unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, protocol))? });
+
+    match protocol {
+        IPPROTO_TCP => {
+            let src_port = u16::from_be(unsafe {
+                *ptr_at(&ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(tcphdr, source))?
+            });
+            let dst_port = u16::from_be(unsafe {
+                *ptr_at(&ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(tcphdr, dest))?
+            });
+
+            let log_entry = PacketLog {
+                src_addr,
+                dst_addr,
+                src_port,
+                dst_port,
+                action: xdp_action::XDP_PASS,
+            };
+            unsafe {
+                EVENTS.output(&ctx, &log_entry, 0);
+            }
+        }
+        IPPROTO_UDP => {
+            let src_port = u16::from_be(unsafe {
+                *ptr_at(&ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, source))?
+            });
+            let dst_port = u16::from_be(unsafe {
+                *ptr_at(&ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, dest))?
+            });
+
+            let log_entry = PacketLog {
+                src_addr,
+                dst_addr,
+                src_port,
+                dst_port,
+                action: xdp_action::XDP_PASS,
+            };
+            unsafe {
+                EVENTS.output(&ctx, &log_entry, 0);
+            }
+        }
+        _ => {}
     }
+
     Ok(xdp_action::XDP_PASS)
 }
 
 const ETH_P_IP: u16 = 0x0800;
+const IPPROTO_TCP: u8 = 6;
+const IPPROTO_UDP: u8 = 17;
 const ETH_HDR_LEN: usize = mem::size_of::<ethhdr>();
+const IP_HDR_LEN: usize = mem::size_of::<iphdr>();

@@ -47,7 +47,7 @@ pub fn run(opts: Options) -> Result<(), anyhow::Error> {
 
     // profile we are building (release or debug)
     let profile = if opts.release { "release" } else { "debug" };
-    let bin_path = format!("target/{}/xdp", profile);
+    let bin_path = format!("target/{}/myapp", profile);
 
     // arguments to pass to the application
     let mut run_args: Vec<_> = opts.run_args.iter().map(String::as_str).collect();
@@ -60,7 +60,6 @@ pub fn run(opts: Options) -> Result<(), anyhow::Error> {
     // spawn the command
     let err = Command::new(args.get(0).expect("No first argument"))
         .args(args.iter().skip(1))
-        .env("RUST_LOG", "info")
         .exec();
 
     // we shouldn't get here unless the command failed to spawn

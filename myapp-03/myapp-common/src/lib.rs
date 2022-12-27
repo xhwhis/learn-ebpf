@@ -3,10 +3,7 @@
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PacketLog {
-    pub src_addr: u32,
-    pub dst_addr: u32,
-    pub src_port: u16,
-    pub dst_port: u16,
+    pub ipv4_address: u32,
     pub action: u32,
 }
 
