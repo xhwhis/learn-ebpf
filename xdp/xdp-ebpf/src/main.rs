@@ -4,14 +4,15 @@
 
 use aya_bpf::{
     bindings::xdp_action,
+    helpers::bpf_xdp_load_bytes,
     macros::{map, xdp},
-    maps::PerfEventArray,
+    maps::{PerCpuArray, PerfEventArray},
     programs::XdpContext,
 };
 
 use core::mem;
 use memoffset::offset_of;
-use xdp_common::PacketLog;
+use xdp_common::{Cache, PacketLog};
 
 mod bindings;
 use bindings::{ethhdr, iphdr, tcphdr, udphdr};
@@ -22,8 +23,10 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 }
 
 #[map(name = "EVENTS")]
-static mut EVENTS: PerfEventArray<PacketLog> =
-    PerfEventArray::<PacketLog>::with_max_entries(1024, 0);
+static mut EVENTS: PerfEventArray<PacketLog> = PerfEventArray::with_max_entries(1024, 0);
+
+#[map(name = "CACHE")]
+static mut CACHE: PerCpuArray<Cache> = PerCpuArray::with_max_entries(1, 0);
 
 #[xdp]
 pub fn xdp_firewall(ctx: XdpContext) -> u32 {
@@ -65,6 +68,14 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
             let dst_port = u16::from_be(unsafe {
                 *ptr_at(&ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(tcphdr, dest))?
             });
+            unsafe {
+                bpf_xdp_load_bytes(
+                    ctx.ctx,
+                    0,
+                    (*(CACHE.get_ptr_mut(0).unwrap())).data.as_mut_ptr() as *mut _,
+                    1,
+                );
+            }
 
             let log_entry = PacketLog {
                 src_addr,
@@ -84,6 +95,14 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
             let dst_port = u16::from_be(unsafe {
                 *ptr_at(&ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, dest))?
             });
+            unsafe {
+                bpf_xdp_load_bytes(
+                    ctx.ctx,
+                    0,
+                    (*(CACHE.get_ptr_mut(0).unwrap())).data.as_mut_ptr() as *mut _,
+                    1,
+                );
+            }
 
             let log_entry = PacketLog {
                 src_addr,
@@ -107,3 +126,5 @@ const IPPROTO_TCP: u8 = 6;
 const IPPROTO_UDP: u8 = 17;
 const ETH_HDR_LEN: usize = mem::size_of::<ethhdr>();
 const IP_HDR_LEN: usize = mem::size_of::<iphdr>();
+const TCP_HDR_LEN: usize = mem::size_of::<tcphdr>();
+const UDP_HDR_LEN: usize = mem::size_of::<udphdr>();

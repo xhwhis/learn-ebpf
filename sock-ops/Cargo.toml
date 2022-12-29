@@ -1,0 +1,2 @@
+[workspace]
+members = ["sock-ops", "sock-ops-common", "xtask"]

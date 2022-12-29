@@ -10,5 +10,14 @@ pub struct PacketLog {
     pub action: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Cache {
+    pub data: [u8; 1024],
+}
+
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for PacketLog {}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for Cache {}
