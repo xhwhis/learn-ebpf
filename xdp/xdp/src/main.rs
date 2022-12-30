@@ -40,32 +40,32 @@ async fn main() -> Result<(), anyhow::Error> {
     program.attach(&opt.iface, XdpFlags::default())
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
 
-    let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("EVENTS")?)?;
+    // let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("EVENTS")?)?;
 
-    for cpu_id in online_cpus()? {
-        let mut buf = perf_array.open(cpu_id, None)?;
+    // for cpu_id in online_cpus()? {
+    //     let mut buf = perf_array.open(cpu_id, None)?;
 
-        task::spawn(async move {
-            let mut buffers = (0..10)
-                .map(|_| BytesMut::with_capacity(1024))
-                .collect::<Vec<_>>();
+    //     task::spawn(async move {
+    //         let mut buffers = (0..10)
+    //             .map(|_| BytesMut::with_capacity(1024))
+    //             .collect::<Vec<_>>();
 
-            loop {
-                let events = buf.read_events(&mut buffers).await.unwrap();
-                for i in 0..events.read {
-                    let buf = &mut buffers[i];
-                    let ptr = buf.as_ptr() as *const PacketLog;
-                    let data = unsafe { ptr.read_unaligned() };
-                    let src_addr = net::Ipv4Addr::from(data.src_addr);
-                    let dst_addr = net::Ipv4Addr::from(data.dst_addr);
-                    info!(
-                        "LOG: SRC {}:{}, DST {}:{}, ACTION {}",
-                        src_addr, data.src_port, dst_addr, data.dst_port, data.action
-                    );
-                }
-            }
-        });
-    }
+    //         loop {
+    //             let events = buf.read_events(&mut buffers).await.unwrap();
+    //             for i in 0..events.read {
+    //                 let buf = &mut buffers[i];
+    //                 let ptr = buf.as_ptr() as *const PacketLog;
+    //                 let data = unsafe { ptr.read_unaligned() };
+    //                 let src_addr = net::Ipv4Addr::from(data.src_addr);
+    //                 let dst_addr = net::Ipv4Addr::from(data.dst_addr);
+    //                 // info!(
+    //                 //     "LOG: SRC {}:{}, DST {}:{}, ACTION {}",
+    //                 //     src_addr, data.src_port, dst_addr, data.dst_port, data.action
+    //                 // );
+    //             }
+    //         }
+    //     });
+    // }
     signal::ctrl_c().await.expect("failed to listen for event");
     Ok::<_, anyhow::Error>(())
 }

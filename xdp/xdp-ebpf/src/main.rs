@@ -4,11 +4,12 @@
 
 use aya_bpf::{
     bindings::xdp_action,
-    helpers::bpf_xdp_load_bytes,
+    helpers::{bpf_xdp_load_bytes, bpf_xdp_output},
     macros::{map, xdp},
-    maps::{PerCpuArray, PerfEventArray},
+    maps::{PerCpuArray, PerfEventArray, PerfEventByteArray},
     programs::XdpContext,
 };
+use aya_log_ebpf::info;
 
 use core::mem;
 use memoffset::offset_of;
@@ -27,6 +28,9 @@ static mut EVENTS: PerfEventArray<PacketLog> = PerfEventArray::with_max_entries(
 
 #[map(name = "CACHE")]
 static mut CACHE: PerCpuArray<Cache> = PerCpuArray::with_max_entries(1, 0);
+
+#[map(name = "LOAD")]
+static mut LOAD: PerfEventByteArray = PerfEventByteArray::with_max_entries(1024, 0);
 
 #[xdp]
 pub fn xdp_firewall(ctx: XdpContext) -> u32 {
@@ -68,14 +72,25 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
             let dst_port = u16::from_be(unsafe {
                 *ptr_at(&ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(tcphdr, dest))?
             });
-            unsafe {
-                bpf_xdp_load_bytes(
-                    ctx.ctx,
-                    0,
-                    (*(CACHE.get_ptr_mut(0).unwrap())).data.as_mut_ptr() as *mut _,
-                    1,
-                );
-            }
+            // unsafe {
+            //     bpf_xdp_load_bytes(
+            //         ctx.ctx,
+            //         0,
+            //         (*(CACHE.get_ptr_mut(0).unwrap())).data.as_mut_ptr() as *mut _,
+            //         1,
+            //     );
+            // }
+            // let cache = unsafe {
+            //     let ptr = CACHE.get_ptr_mut(0).ok_or(xdp_action::XDP_PASS).unwrap();
+            //     &mut *ptr
+            // };
+            // let len = ctx
+            //     .load_bytes(ctx.data(), &mut cache.data)
+            //     .map_err(|e| {
+            //         error!(&ctx, "failed to load the packet: {}", e);
+            //         xdp_action::XDP_PASS
+            //     })
+            //     .unwrap();
 
             let log_entry = PacketLog {
                 src_addr,
@@ -95,13 +110,17 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
             let dst_port = u16::from_be(unsafe {
                 *ptr_at(&ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, dest))?
             });
+            // unsafe {
+            //     bpf_xdp_load_bytes(
+            //         ctx.ctx,
+            //         0,
+            //         (*(CACHE.get_ptr_mut(0).unwrap())).data.as_mut_ptr() as *mut _,
+            //         1,
+            //     );
+            // }
             unsafe {
-                bpf_xdp_load_bytes(
-                    ctx.ctx,
-                    0,
-                    (*(CACHE.get_ptr_mut(0).unwrap())).data.as_mut_ptr() as *mut _,
-                    1,
-                );
+                let packet = core::slice::from_raw_parts(ctx.data() as *const u8, 12);
+                let a = core::str::from_utf8_unchecked(&packet);
             }
 
             let log_entry = PacketLog {
