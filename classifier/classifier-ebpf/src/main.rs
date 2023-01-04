@@ -12,6 +12,7 @@ use aya_bpf::{
 };
 use aya_log_ebpf::info;
 
+use classifier_common::{find_x_forwarded_for_header, parse_ipv4_addr};
 use memoffset::offset_of;
 
 mod bindings;
@@ -22,10 +23,11 @@ const IPPROTO_TCP: u8 = 6;
 const ETH_HDR_LEN: usize = mem::size_of::<ethhdr>();
 const IP_HDR_LEN: usize = mem::size_of::<iphdr>();
 const TCP_HDR_LEN: usize = mem::size_of::<tcphdr>();
+const BUF_SIZE: usize = 256;
 
 #[repr(C)]
 pub struct Buf {
-    pub buf: [u8; 1024],
+    pub buf: [u8; BUF_SIZE],
 }
 
 #[map]
@@ -40,18 +42,17 @@ pub fn classifier(ctx: TcContext) -> i32 {
 }
 
 fn try_classifier(ctx: TcContext) -> Result<i32, i32> {
-    let eth_type = ctx
-        .load::<u16>(offset_of!(ethhdr, h_proto))
-        .map_err(|_| TC_ACT_PIPE)?;
-    info!(&ctx, "eth_type: {}", eth_type);
-    if eth_type != ETH_P_IP {
+    let h_proto = u16::from_be(
+        ctx.load(offset_of!(ethhdr, h_proto))
+            .map_err(|_| TC_ACT_PIPE)?,
+    );
+    if h_proto != ETH_P_IP {
         return Ok(TC_ACT_PIPE);
     }
 
     let protocol = ctx
         .load::<u8>(ETH_HDR_LEN + offset_of!(iphdr, protocol))
         .map_err(|_| TC_ACT_PIPE)?;
-    info!(&ctx, "protocol: {}", protocol);
     if protocol != IPPROTO_TCP {
         return Ok(TC_ACT_PIPE);
     }
@@ -61,15 +62,24 @@ fn try_classifier(ctx: TcContext) -> Result<i32, i32> {
         &mut *ptr
     };
     let offset = ETH_HDR_LEN + IP_HDR_LEN + TCP_HDR_LEN;
-    let len = ctx
+    let mut len = ctx
         .load_bytes(offset, &mut buf.buf)
         .map_err(|_| TC_ACT_PIPE)?;
+    if len > BUF_SIZE {
+        len = BUF_SIZE
+    }
 
     // do something with `buf`
-    unsafe {
-        let a = &buf.buf[..len];
-        info!(&ctx, "payload: {}", core::str::from_utf8_unchecked(a));
+    let (found, pos) = find_x_forwarded_for_header(&buf.buf[..len]);
+    if !found {
+        return Ok(TC_ACT_PIPE);
     }
+    if pos + 15 >= BUF_SIZE {
+        return Ok(TC_ACT_PIPE);
+    }
+    let tmp = &buf.buf[pos..pos + BUF_SIZE];
+    let ip = parse_ipv4_addr(tmp).map_err(|_| TC_ACT_PIPE)?;
+    info!(&ctx, "ip: {}", ip);
 
     Ok(TC_ACT_PIPE)
 }
