@@ -1,22 +1,22 @@
 #![no_std]
 
-pub const MAX_MSG_SIZE: usize = 30720;
+pub const MAX_MSG_SIZE: usize = 8000;
 
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub struct sockaddr {
+#[derive(Clone, Copy, Debug)]
+pub struct SockAddr {
     pub sa_family: u16,
     pub sa_data: [u8; 14],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct AcceptArgsT {
-    pub addr: *const sockaddr,
+pub struct OpenArgsT {
+    pub addr: *const SockAddr,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ConnIdT {
     pub pid: u32,
     pub fd: i32,
@@ -27,10 +27,8 @@ pub struct ConnIdT {
 #[derive(Clone, Copy)]
 pub struct ConnInfoT {
     pub conn_id: ConnIdT,
-    pub rd_bytes: isize,
-    pub wr_bytes: isize,
-    pub is_http: bool,
-    pub pad: [bool; 7],
+    pub rd_bytes: usize,
+    pub wr_bytes: usize,
 }
 
 #[repr(C)]
@@ -40,20 +38,21 @@ pub struct DataArgsT {
     pub buf: *const u8,
 }
 
-#[derive(Clone, Copy)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub enum TrafficDirectionT {
     Ingress,
     Egress,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct AttrT {
     pub timestamp_ns: u64,
     pub conn_id: ConnIdT,
     pub direction: TrafficDirectionT,
-    pub msg_size: u32,
-    pub pos: u64,
+    pub msg_size: usize,
+    pub pos: usize,
 }
 
 #[repr(C)]
@@ -63,27 +62,27 @@ pub struct CloseArgsT {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct SocketOpenEventT {
     pub timestamp_ns: u64,
     pub conn_id: ConnIdT,
-    pub addr: sockaddr,
+    pub addr: SockAddr,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct SocketDataEventT {
     pub attr: AttrT,
     pub msg: [u8; MAX_MSG_SIZE],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct SocketCloseEventT {
     pub timestamp_ns: u64,
     pub conn_id: ConnIdT,
-    pub rd_bytes: isize,
-    pub wr_bytes: isize,
+    pub rd_bytes: usize,
+    pub wr_bytes: usize,
 }
 
 #[cfg(feature = "user")]

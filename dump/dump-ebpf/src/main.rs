@@ -9,14 +9,17 @@ use aya_bpf::{
 };
 
 use dump_common::{
-    sockaddr, AcceptArgsT, CloseArgsT, ConnIdT, ConnInfoT, DataArgsT, SocketCloseEventT,
+    CloseArgsT, ConnIdT, ConnInfoT, DataArgsT, OpenArgsT, SockAddr, SocketCloseEventT,
     SocketDataEventT, SocketOpenEventT, TrafficDirectionT, MAX_MSG_SIZE,
 };
 
 const CHUNK_LIMIT: usize = 4;
 
 #[map]
-static mut ACTIVE_ACCEPT_ARGS_MAP: HashMap<u64, AcceptArgsT> = HashMap::with_max_entries(131072, 0);
+static mut ACTIVE_ACCEPT_ARGS_MAP: HashMap<u64, OpenArgsT> = HashMap::with_max_entries(131072, 0);
+
+#[map]
+static mut ACTIVE_CONNECT_ARGS_MAP: HashMap<u64, OpenArgsT> = HashMap::with_max_entries(131072, 0);
 
 #[map]
 static mut ACTIVE_READ_ARGS_MAP: HashMap<u64, DataArgsT> = HashMap::with_max_entries(131072, 0);
@@ -61,8 +64,8 @@ pub fn exit_accept4(ctx: ProbeContext) -> u32 {
 
 fn try_entry_accept4(ctx: ProbeContext) -> Result<u32, u32> {
     let id = bpf_get_current_pid_tgid();
-    let addr: *const sockaddr = ctx.arg(1).ok_or(1u32)?;
-    let accept_args = AcceptArgsT { addr };
+    let addr: *const SockAddr = ctx.arg(1).ok_or(1u32)?;
+    let accept_args = OpenArgsT { addr };
     unsafe {
         ACTIVE_ACCEPT_ARGS_MAP
             .insert(&id, &accept_args, 0)
@@ -75,7 +78,7 @@ fn try_entry_accept4(ctx: ProbeContext) -> Result<u32, u32> {
 fn try_exit_accept4(ctx: ProbeContext) -> Result<u32, u32> {
     let id = bpf_get_current_pid_tgid();
     if let Some(accept_args) = unsafe { ACTIVE_ACCEPT_ARGS_MAP.get(&id) } {
-        process_syscall_accept(ctx, id, accept_args)?;
+        process_open(ctx, id, accept_args)?;
     }
     unsafe {
         ACTIVE_ACCEPT_ARGS_MAP.remove(&id).map_err(|_| 1u32)?;
@@ -84,7 +87,8 @@ fn try_exit_accept4(ctx: ProbeContext) -> Result<u32, u32> {
     Ok(0)
 }
 
-fn process_syscall_accept(ctx: ProbeContext, id: u64, args: &AcceptArgsT) -> Result<u32, u32> {
+#[inline(always)]
+fn process_open(ctx: ProbeContext, id: u64, args: &OpenArgsT) -> Result<u32, u32> {
     let ret_fd: i32 = ctx.ret().ok_or(1u32)?;
     if ret_fd < 0 {
         return Ok(0);
@@ -97,11 +101,9 @@ fn process_syscall_accept(ctx: ProbeContext, id: u64, args: &AcceptArgsT) -> Res
         tsid: unsafe { bpf_ktime_get_ns() },
     };
     let conn_info = ConnInfoT {
-        conn_id: conn_id,
+        conn_id,
         rd_bytes: 0,
         wr_bytes: 0,
-        is_http: false,
-        pad: [false; 7],
     };
 
     let pid_fd: u64 = (pid as u64) << 32 | ret_fd as u64;
@@ -119,6 +121,47 @@ fn process_syscall_accept(ctx: ProbeContext, id: u64, args: &AcceptArgsT) -> Res
     };
     unsafe {
         SOCKET_OPEN_EVENTS.output(&ctx, &open_event, 0);
+    }
+
+    Ok(0)
+}
+
+#[kprobe(name = "entry_connect")]
+pub fn entry_connect(ctx: ProbeContext) -> u32 {
+    match try_entry_connect(ctx) {
+        Ok(ret) => ret,
+        Err(ret) => ret,
+    }
+}
+
+#[kretprobe(name = "exit_connect")]
+pub fn exit_connect(ctx: ProbeContext) -> u32 {
+    match try_exit_connect(ctx) {
+        Ok(ret) => ret,
+        Err(ret) => ret,
+    }
+}
+
+fn try_entry_connect(ctx: ProbeContext) -> Result<u32, u32> {
+    let id = bpf_get_current_pid_tgid();
+    let addr: *const SockAddr = ctx.arg(1).ok_or(1u32)?;
+    let accept_args = OpenArgsT { addr };
+    unsafe {
+        ACTIVE_CONNECT_ARGS_MAP
+            .insert(&id, &accept_args, 0)
+            .map_err(|_| 1u32)?;
+    }
+
+    Ok(0)
+}
+
+fn try_exit_connect(ctx: ProbeContext) -> Result<u32, u32> {
+    let id = bpf_get_current_pid_tgid();
+    if let Some(accept_args) = unsafe { ACTIVE_CONNECT_ARGS_MAP.get(&id) } {
+        process_open(ctx, id, accept_args)?;
+    }
+    unsafe {
+        ACTIVE_CONNECT_ARGS_MAP.remove(&id).map_err(|_| 1u32)?;
     }
 
     Ok(0)
@@ -162,7 +205,13 @@ fn try_exit_read(ctx: ProbeContext) -> Result<u32, u32> {
 
     let id = bpf_get_current_pid_tgid();
     if let Some(read_args) = unsafe { ACTIVE_READ_ARGS_MAP.get(&id) } {
-        process_data(ctx, id, TrafficDirectionT::Ingress, read_args, ret_count)?;
+        process_data(
+            ctx,
+            id,
+            TrafficDirectionT::Ingress,
+            read_args,
+            ret_count as usize,
+        )?;
     }
     unsafe {
         ACTIVE_READ_ARGS_MAP.remove(&id).map_err(|_| 1u32)?;
@@ -171,12 +220,13 @@ fn try_exit_read(ctx: ProbeContext) -> Result<u32, u32> {
     Ok(0)
 }
 
+#[inline(always)]
 fn process_data(
     ctx: ProbeContext,
     id: u64,
     direction: TrafficDirectionT,
     args: &DataArgsT,
-    count: isize,
+    count: usize,
 ) -> Result<u32, u32> {
     if args.buf.is_null() {
         return Ok(0);
@@ -184,26 +234,28 @@ fn process_data(
 
     let pid = (id >> 32) as u32;
     let pid_fd: u64 = (pid as u64) << 32 | args.fd as u64;
-    if let Some(conn_info) = unsafe { CONN_INFO_MAP.get_ptr_mut(&pid_fd) } {
-        if is_http_connection(conn_info, args.buf, count) {
-            if let Some(event) = unsafe { SOCKET_DATA_EVENT_BUFFER_HEAP.get_ptr_mut(0) } {
-                unsafe {
-                    (*event).attr.timestamp_ns = bpf_ktime_get_ns();
-                    (*event).attr.direction = direction;
-                    (*event).attr.conn_id.pid = (*conn_info).conn_id.pid;
-                    (*event).attr.conn_id.fd = (*conn_info).conn_id.fd;
-                    (*event).attr.conn_id.tsid = (*conn_info).conn_id.tsid;
-                }
+    if let Some(conn_info_ptr) = unsafe { CONN_INFO_MAP.get_ptr_mut(&pid_fd) } {
+        if conn_info_ptr.is_null() {
+            return Ok(0);
+        }
+        let conn_info = unsafe { &mut *conn_info_ptr };
 
-                perf_submit_wrapper(ctx, direction, args.buf, count, conn_info, event)?;
-            } else {
+        if let Some(event_ptr) = unsafe { SOCKET_DATA_EVENT_BUFFER_HEAP.get_ptr_mut(0) } {
+            if event_ptr.is_null() {
                 return Ok(0);
             }
+            let event = unsafe { &mut *event_ptr };
+
+            event.attr.timestamp_ns = unsafe { bpf_ktime_get_ns() };
+            event.attr.direction = direction;
+            event.attr.conn_id = conn_info.conn_id;
+
+            perf_submit_wrapper(ctx, direction, args.buf, count, conn_info, event)?;
         }
 
         match direction {
-            TrafficDirectionT::Ingress => unsafe { (*conn_info).rd_bytes += count },
-            TrafficDirectionT::Egress => unsafe { (*conn_info).wr_bytes += count },
+            TrafficDirectionT::Ingress => conn_info.rd_bytes += count,
+            TrafficDirectionT::Egress => conn_info.wr_bytes += count,
         }
     } else {
         return Ok(0);
@@ -212,55 +264,18 @@ fn process_data(
     Ok(0)
 }
 
-fn is_http_connection(conn_info: *mut ConnInfoT, buf: *const u8, count: isize) -> bool {
-    if unsafe { (*conn_info).is_http } {
-        return true;
-    }
-
-    if count < 16 {
-        return false;
-    }
-
-    macro_rules! buf_byte {
-        ($offset:literal) => {
-            unsafe { bpf_probe_read(buf.add($offset)).unwrap() }
-        };
-    }
-    if buf_byte!(0) == b'H' && buf_byte!(1) == b'T' && buf_byte!(2) == b'T' && buf_byte!(3) == b'P'
-    {
-        unsafe {
-            (*conn_info).is_http = true;
-        }
-        return true;
-    }
-    if buf_byte!(0) == b'G' && buf_byte!(1) == b'E' && buf_byte!(2) == b'T' {
-        unsafe {
-            (*conn_info).is_http = true;
-        }
-        return true;
-    }
-    if buf_byte!(0) == b'P' && buf_byte!(1) == b'O' && buf_byte!(2) == b'S' && buf_byte!(3) == b'T'
-    {
-        unsafe {
-            (*conn_info).is_http = true;
-        }
-        return true;
-    }
-
-    return false;
-}
-
+#[inline(always)]
 fn perf_submit_wrapper(
     ctx: ProbeContext,
     direction: TrafficDirectionT,
     buf: *const u8,
-    count: isize,
-    conn_info: *mut ConnInfoT,
-    event: *mut SocketDataEventT,
+    count: usize,
+    conn_info: &mut ConnInfoT,
+    event: &mut SocketDataEventT,
 ) -> Result<u32, u32> {
     let mut sent_count = 0;
     for i in 0..CHUNK_LIMIT {
-        let remaining_count = count as usize - sent_count;
+        let remaining_count = count - sent_count;
         let current_count = if remaining_count > MAX_MSG_SIZE && i != CHUNK_LIMIT - 1 {
             MAX_MSG_SIZE
         } else {
@@ -276,7 +291,7 @@ fn perf_submit_wrapper(
             event,
         )?;
         sent_count += current_count;
-        if sent_count == count as usize {
+        if sent_count == count {
             return Ok(0);
         }
     }
@@ -284,22 +299,19 @@ fn perf_submit_wrapper(
     Ok(0)
 }
 
+#[inline(always)]
 fn perf_submit_buf(
     ctx: &ProbeContext,
     direction: TrafficDirectionT,
     buf: *const u8,
     count: usize,
     offset: usize,
-    conn_info: *mut ConnInfoT,
-    event: *mut SocketDataEventT,
+    conn_info: &mut ConnInfoT,
+    event: &mut SocketDataEventT,
 ) -> Result<u32, u32> {
     match direction {
-        TrafficDirectionT::Ingress => unsafe {
-            (*event).attr.pos = (*conn_info).rd_bytes as u64 + offset as u64
-        },
-        TrafficDirectionT::Egress => unsafe {
-            (*event).attr.pos = (*conn_info).wr_bytes as u64 + offset as u64
-        },
+        TrafficDirectionT::Ingress => event.attr.pos = conn_info.rd_bytes + offset,
+        TrafficDirectionT::Egress => event.attr.pos = conn_info.wr_bytes + offset,
     }
 
     let len = if count < MAX_MSG_SIZE {
@@ -308,10 +320,12 @@ fn perf_submit_buf(
         MAX_MSG_SIZE
     };
     unsafe {
-        bpf_probe_read_buf(buf, &mut (*event).msg[..len]).map_err(|_| 1u32)?;
-        (*event).attr.msg_size = len as u32;
+        bpf_probe_read_buf(buf, &mut event.msg[..len]).map_err(|_| 1u32)?;
+    }
+    event.attr.msg_size = len;
 
-        SOCKET_DATA_EVENTS.output(ctx, &*event, 0);
+    unsafe {
+        SOCKET_DATA_EVENTS.output(ctx, event, 0);
     }
 
     Ok(0)
@@ -355,7 +369,13 @@ fn try_exit_write(ctx: ProbeContext) -> Result<u32, u32> {
 
     let id = bpf_get_current_pid_tgid();
     if let Some(write_args) = unsafe { ACTIVE_WRITE_ARGS_MAP.get(&id) } {
-        process_data(ctx, id, TrafficDirectionT::Egress, write_args, ret_count)?;
+        process_data(
+            ctx,
+            id,
+            TrafficDirectionT::Egress,
+            write_args,
+            ret_count as usize,
+        )?;
     }
     unsafe {
         ACTIVE_WRITE_ARGS_MAP.remove(&id).map_err(|_| 1u32)?;
@@ -405,6 +425,7 @@ fn try_exit_close(ctx: ProbeContext) -> Result<u32, u32> {
     Ok(0)
 }
 
+#[inline(always)]
 fn process_syscall_close(ctx: ProbeContext, id: u64, args: &CloseArgsT) -> Result<u32, u32> {
     let ret: i32 = ctx.ret().ok_or(1u32)?;
     if ret < 0 {
