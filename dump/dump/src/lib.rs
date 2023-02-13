@@ -27,11 +27,11 @@ static NOTIFY: Lazy<sync::Notify> = Lazy::new(sync::Notify::new);
 
 #[no_mangle]
 pub extern "C" fn start_dump() {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async { dump().await.unwrap() })
+    std::thread::spawn(|| {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async { dump().await.unwrap() })
+    });
 }
 
 #[no_mangle]
@@ -141,11 +141,6 @@ async fn dump() -> Result<(), anyhow::Error> {
                     let ptr = buf.as_ptr() as *const SocketDataEventT;
                     let data = unsafe { ptr.read_unaligned() };
 
-                    println!("DATA: {}", unsafe {
-                        core::str::from_utf8_unchecked(
-                            &data.msg[data.attr.pos..data.attr.pos + data.attr.msg_size],
-                        )
-                    });
                     s.send(data).unwrap();
                 }
             }

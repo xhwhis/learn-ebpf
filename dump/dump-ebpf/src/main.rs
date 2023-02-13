@@ -9,42 +9,36 @@ use aya_bpf::{
 };
 
 use dump_common::{
-    CloseArgsT, ConnIdT, ConnInfoT, DataArgsT, OpenArgsT, SockAddr, SocketCloseEventT,
-    SocketDataEventT, SocketOpenEventT, TrafficDirectionT, MAX_MSG_SIZE,
+    CloseArgsT, ConnIdT, ConnInfoT, DataArgsT, OpenArgsT, SockAddr, SocketDataEventT,
+    TrafficDirectionT, MAX_MSG_SIZE,
 };
 
 const CHUNK_LIMIT: usize = 4;
 
 #[map]
-static mut ACTIVE_ACCEPT_ARGS_MAP: HashMap<u64, OpenArgsT> = HashMap::with_max_entries(131072, 0);
+static mut ACTIVE_ACCEPT_ARGS_MAP: HashMap<u64, OpenArgsT> = HashMap::with_max_entries(1024, 0);
 
 #[map]
-static mut ACTIVE_CONNECT_ARGS_MAP: HashMap<u64, OpenArgsT> = HashMap::with_max_entries(131072, 0);
+static mut ACTIVE_CONNECT_ARGS_MAP: HashMap<u64, OpenArgsT> = HashMap::with_max_entries(1024, 0);
 
 #[map]
-static mut ACTIVE_READ_ARGS_MAP: HashMap<u64, DataArgsT> = HashMap::with_max_entries(131072, 0);
+static mut ACTIVE_READ_ARGS_MAP: HashMap<u64, DataArgsT> = HashMap::with_max_entries(1024, 0);
 
 #[map]
-static mut ACTIVE_WRITE_ARGS_MAP: HashMap<u64, DataArgsT> = HashMap::with_max_entries(131072, 0);
+static mut ACTIVE_WRITE_ARGS_MAP: HashMap<u64, DataArgsT> = HashMap::with_max_entries(1024, 0);
 
 #[map]
-static mut ACTIVE_CLOSE_ARGS_MAP: HashMap<u64, CloseArgsT> = HashMap::with_max_entries(131072, 0);
+static mut ACTIVE_CLOSE_ARGS_MAP: HashMap<u64, CloseArgsT> = HashMap::with_max_entries(1024, 0);
 
 #[map]
-static mut CONN_INFO_MAP: HashMap<u64, ConnInfoT> = HashMap::with_max_entries(131072, 0);
+static mut CONN_INFO_MAP: HashMap<u64, ConnInfoT> = HashMap::with_max_entries(1024, 0);
 
 #[map]
 static mut SOCKET_DATA_EVENT_BUFFER_HEAP: PerCpuArray<SocketDataEventT> =
     PerCpuArray::with_max_entries(1, 0);
 
-#[map(name = "SOCKET_OPEN_EVENTS")]
-static mut SOCKET_OPEN_EVENTS: PerfEventArray<SocketOpenEventT> = PerfEventArray::new(0);
-
 #[map(name = "SOCKET_DATA_EVENTS")]
 static mut SOCKET_DATA_EVENTS: PerfEventArray<SocketDataEventT> = PerfEventArray::new(0);
-
-#[map(name = "SOCKET_CLOSE_EVENTS")]
-static mut SOCKET_CLOSE_EVENTS: PerfEventArray<SocketCloseEventT> = PerfEventArray::new(0);
 
 #[kprobe(name = "entry_accept4")]
 pub fn entry_accept4(ctx: ProbeContext) -> u32 {
@@ -95,13 +89,11 @@ fn process_open(ctx: ProbeContext, id: u64, args: &OpenArgsT) -> Result<u32, u32
     }
 
     let pid = (id >> 32) as u32;
-    let conn_id = ConnIdT {
-        pid,
-        fd: ret_fd,
-        tsid: unsafe { bpf_ktime_get_ns() },
-    };
+    let conn_id = ConnIdT { pid, fd: ret_fd };
+    let addr = unsafe { bpf_probe_read(args.addr).map_err(|_| 1u32)? };
     let conn_info = ConnInfoT {
         conn_id,
+        addr,
         rd_bytes: 0,
         wr_bytes: 0,
     };
@@ -111,16 +103,6 @@ fn process_open(ctx: ProbeContext, id: u64, args: &OpenArgsT) -> Result<u32, u32
         CONN_INFO_MAP
             .insert(&pid_fd, &conn_info, 0)
             .map_err(|_| 1u32)?;
-    }
-
-    let addr = unsafe { bpf_probe_read(args.addr).map_err(|_| 1u32)? };
-    let open_event = SocketOpenEventT {
-        timestamp_ns: unsafe { bpf_ktime_get_ns() },
-        conn_id,
-        addr,
-    };
-    unsafe {
-        SOCKET_OPEN_EVENTS.output(&ctx, &open_event, 0);
     }
 
     Ok(0)
@@ -249,6 +231,7 @@ fn process_data(
             event.attr.timestamp_ns = unsafe { bpf_ktime_get_ns() };
             event.attr.direction = direction;
             event.attr.conn_id = conn_info.conn_id;
+            event.attr.addr = conn_info.addr;
 
             perf_submit_wrapper(ctx, direction, args.buf, count, conn_info, event)?;
         }
@@ -434,20 +417,6 @@ fn process_syscall_close(ctx: ProbeContext, id: u64, args: &CloseArgsT) -> Resul
 
     let pid = (id >> 32) as u32;
     let pid_fd = (pid as u64) << 32 | args.fd as u64;
-    if let Some(conn_info) = unsafe { CONN_INFO_MAP.get(&pid_fd) } {
-        let close_event = SocketCloseEventT {
-            timestamp_ns: unsafe { bpf_ktime_get_ns() },
-            conn_id: conn_info.conn_id,
-            rd_bytes: conn_info.rd_bytes,
-            wr_bytes: conn_info.wr_bytes,
-        };
-        unsafe {
-            SOCKET_CLOSE_EVENTS.output(&ctx, &close_event, 0);
-        }
-    } else {
-        return Ok(0);
-    }
-
     unsafe {
         CONN_INFO_MAP.remove(&pid_fd).map_err(|_| 1u32)?;
     }

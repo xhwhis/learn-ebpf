@@ -1,3 +1,12 @@
 {
-  "rust-analyzer.linkedProjects": ["Cargo.toml", "dump-ebpf/Cargo.toml"]
+  "rust-analyzer.linkedProjects": ["Cargo.toml", "dump-ebpf/Cargo.toml"],
+  "files.associations": {
+    "array": "c",
+    "functional": "c",
+    "tuple": "c",
+    "type_traits": "c",
+    "utility": "c",
+    "threads.h": "c"
+  },
+  "C_Cpp.errorSquiggles": "disabled"
 }
