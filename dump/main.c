@@ -6,7 +6,6 @@
 #include <inttypes.h>
 #include <threads.h>
 #include <arpa/inet.h>
-#include <netinet/in.h>
 
 // Data structures.
 
@@ -164,16 +163,27 @@ void execute(get_data_fn_t fn)
     // Drop the future when finished or canceled.
     (fut.drop)(fut.fut);
 
-    char ip_str[255];
-    struct sockaddr_in *addr_in = (struct sockaddr_in *)&ret.value.attr.sock_addr;
-    inet_ntop(addr_in->sin_family, &addr_in->sin_addr, ip_str, sizeof(ip_str));
+    if (ret.value.attr.sock_addr.sa_family == AF_INET)
+    {
+        char str[INET_ADDRSTRLEN];
+        struct sockaddr_in *sin = (struct sockaddr_in *)&ret.value.attr.sock_addr;
+        inet_ntop(AF_INET, &(sin->sin_addr), str, INET_ADDRSTRLEN);
+        printf("IP: %s\n", str);
+    }
+    else if (ret.value.attr.sock_addr.sa_family == AF_INET6)
+    {
+        char str[INET6_ADDRSTRLEN];
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&ret.value.attr.sock_addr;
+        inet_ntop(AF_INET6, &(sin6->sin6_addr), str, INET6_ADDRSTRLEN);
+        printf("IP: %s\n", str);
+    }
 
     if (ret.value.attr.msg_size < MAX_MSG_SIZE)
     {
         ret.value.msg[ret.value.attr.msg_size] = '\0';
     }
     char *payload = &ret.value.msg[ret.value.attr.pos];
-    printf("addr: %s:%d\nnpayload: %s\npid: %u fd: %d timestamp: %ld\n", ip_str, ntohs(addr_in->sin_port), payload, ret.value.attr.conn_id.pid, ret.value.attr.conn_id.fd, ret.value.attr.timestamp_ns);
+    printf("payload: %s\npid: %u fd: %d timestamp: %ld\n", payload, ret.value.attr.conn_id.pid, ret.value.attr.conn_id.fd, ret.value.attr.timestamp_ns);
 }
 
 int main(int argc, char const **argv)
@@ -215,7 +225,10 @@ int main(int argc, char const **argv)
     }
 
     start_dump_fn();
-    execute(get_data_fn);
+    while (1)
+    {
+        execute(get_data_fn);
+    }
     stop_dump_fn();
 
     dlclose(dl);
