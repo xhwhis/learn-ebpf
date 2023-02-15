@@ -1,6 +1,6 @@
 use async_ffi::{FfiFuture, FutureExt};
 use aya::maps::perf::AsyncPerfEventArray;
-use aya::programs::KProbe;
+use aya::programs::UProbe;
 use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Bpf};
 use bytes::BytesMut;
@@ -64,63 +64,63 @@ async fn dump() -> Result<(), anyhow::Error> {
     ))?;
     // entry accept4
     {
-        let program: &mut KProbe = bpf.program_mut("entry_accept4").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("entry_accept4").unwrap().try_into()?;
         program.load()?;
-        program.attach("__sys_accept4", 0)?;
+        program.attach(Some("accept4"), 0, "libc", None)?;
     }
     // exit accept4
     {
-        let program: &mut KProbe = bpf.program_mut("exit_accept4").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("exit_accept4").unwrap().try_into()?;
         program.load()?;
-        program.attach("__sys_accept4", 0)?;
+        program.attach(Some("accept4"), 0, "libc", None)?;
     }
     // entry connect
     {
-        let program: &mut KProbe = bpf.program_mut("entry_connect").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("entry_connect").unwrap().try_into()?;
         program.load()?;
-        program.attach("__sys_connect", 0)?;
+        program.attach(Some("connect"), 0, "libc", None)?;
     }
     // exit connect
     {
-        let program: &mut KProbe = bpf.program_mut("exit_connect").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("exit_connect").unwrap().try_into()?;
         program.load()?;
-        program.attach("__sys_connect", 0)?;
+        program.attach(Some("connect"), 0, "libc", None)?;
     }
     // entry read
     {
-        let program: &mut KProbe = bpf.program_mut("entry_read").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("entry_read").unwrap().try_into()?;
         program.load()?;
-        program.attach("ksys_read", 0)?;
+        program.attach(Some("read"), 0, "libc", None)?;
     }
     // exit read
     {
-        let program: &mut KProbe = bpf.program_mut("exit_read").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("exit_read").unwrap().try_into()?;
         program.load()?;
-        program.attach("ksys_read", 0)?;
+        program.attach(Some("read"), 0, "libc", None)?;
     }
     // entry write
     {
-        let program: &mut KProbe = bpf.program_mut("entry_write").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("entry_write").unwrap().try_into()?;
         program.load()?;
-        program.attach("ksys_write", 0)?;
+        program.attach(Some("write"), 0, "libc", None)?;
     }
     // exit write
     {
-        let program: &mut KProbe = bpf.program_mut("exit_write").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("exit_write").unwrap().try_into()?;
         program.load()?;
-        program.attach("ksys_write", 0)?;
+        program.attach(Some("write"), 0, "libc", None)?;
     }
     // entry close
     {
-        let program: &mut KProbe = bpf.program_mut("entry_close").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("entry_close").unwrap().try_into()?;
         program.load()?;
-        program.attach("close_fd", 0)?;
+        program.attach(Some("close"), 0, "libc", None)?;
     }
     // exit close
     {
-        let program: &mut KProbe = bpf.program_mut("exit_close").unwrap().try_into()?;
+        let program: &mut UProbe = bpf.program_mut("exit_close").unwrap().try_into()?;
         program.load()?;
-        program.attach("close_fd", 0)?;
+        program.attach(Some("close"), 0, "libc", None)?;
     }
 
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("SOCKET_DATA_EVENTS")?)?;
@@ -136,6 +136,7 @@ async fn dump() -> Result<(), anyhow::Error> {
 
             loop {
                 let events = buf.read_events(&mut buffers).await.unwrap();
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..events.read {
                     let buf = &mut buffers[i];
                     let ptr = buf.as_ptr() as *const SocketDataEventT;

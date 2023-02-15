@@ -3,7 +3,7 @@
 
 use aya_bpf::{
     helpers::{bpf_get_current_pid_tgid, bpf_ktime_get_ns, bpf_probe_read, bpf_probe_read_buf},
-    macros::{kprobe, kretprobe, map},
+    macros::{map, uprobe, uretprobe},
     maps::{HashMap, PerCpuArray, PerfEventArray},
     programs::ProbeContext,
 };
@@ -40,7 +40,7 @@ static mut SOCKET_DATA_EVENT_BUFFER_HEAP: PerCpuArray<SocketDataEventT> =
 #[map(name = "SOCKET_DATA_EVENTS")]
 static mut SOCKET_DATA_EVENTS: PerfEventArray<SocketDataEventT> = PerfEventArray::new(0);
 
-#[kprobe(name = "entry_accept4")]
+#[uprobe(name = "entry_accept4")]
 pub fn entry_accept4(ctx: ProbeContext) -> u32 {
     match try_entry_accept4(ctx) {
         Ok(ret) => ret,
@@ -48,7 +48,7 @@ pub fn entry_accept4(ctx: ProbeContext) -> u32 {
     }
 }
 
-#[kretprobe(name = "exit_accept4")]
+#[uretprobe(name = "exit_accept4")]
 pub fn exit_accept4(ctx: ProbeContext) -> u32 {
     match try_exit_accept4(ctx) {
         Ok(ret) => ret,
@@ -108,7 +108,7 @@ fn process_open(ctx: ProbeContext, id: u64, args: &OpenArgsT) -> Result<u32, u32
     Ok(0)
 }
 
-#[kprobe(name = "entry_connect")]
+#[uprobe(name = "entry_connect")]
 pub fn entry_connect(ctx: ProbeContext) -> u32 {
     match try_entry_connect(ctx) {
         Ok(ret) => ret,
@@ -116,7 +116,7 @@ pub fn entry_connect(ctx: ProbeContext) -> u32 {
     }
 }
 
-#[kretprobe(name = "exit_connect")]
+#[uretprobe(name = "exit_connect")]
 pub fn exit_connect(ctx: ProbeContext) -> u32 {
     match try_exit_connect(ctx) {
         Ok(ret) => ret,
@@ -149,7 +149,7 @@ fn try_exit_connect(ctx: ProbeContext) -> Result<u32, u32> {
     Ok(0)
 }
 
-#[kprobe(name = "entry_read")]
+#[uprobe(name = "entry_read")]
 pub fn entry_read(ctx: ProbeContext) -> u32 {
     match try_entry_read(ctx) {
         Ok(ret) => ret,
@@ -157,7 +157,7 @@ pub fn entry_read(ctx: ProbeContext) -> u32 {
     }
 }
 
-#[kretprobe(name = "exit_read")]
+#[uretprobe(name = "exit_read")]
 pub fn exit_read(ctx: ProbeContext) -> u32 {
     match try_exit_read(ctx) {
         Ok(ret) => ret,
@@ -231,7 +231,22 @@ fn process_data(
             event.attr.timestamp_ns = unsafe { bpf_ktime_get_ns() };
             event.attr.direction = direction;
             event.attr.conn_id = conn_info.conn_id;
-            event.attr.addr = conn_info.addr;
+            // FIXME
+            event.attr.addr.sa_family = conn_info.addr.sa_family;
+            event.attr.addr.sa_data[0] = conn_info.addr.sa_data[0];
+            event.attr.addr.sa_data[1] = conn_info.addr.sa_data[1];
+            event.attr.addr.sa_data[2] = conn_info.addr.sa_data[2];
+            event.attr.addr.sa_data[3] = conn_info.addr.sa_data[3];
+            event.attr.addr.sa_data[4] = conn_info.addr.sa_data[4];
+            event.attr.addr.sa_data[5] = conn_info.addr.sa_data[5];
+            event.attr.addr.sa_data[6] = conn_info.addr.sa_data[6];
+            event.attr.addr.sa_data[7] = conn_info.addr.sa_data[7];
+            event.attr.addr.sa_data[8] = conn_info.addr.sa_data[8];
+            event.attr.addr.sa_data[9] = conn_info.addr.sa_data[9];
+            event.attr.addr.sa_data[10] = conn_info.addr.sa_data[10];
+            event.attr.addr.sa_data[11] = conn_info.addr.sa_data[11];
+            event.attr.addr.sa_data[12] = conn_info.addr.sa_data[12];
+            event.attr.addr.sa_data[13] = conn_info.addr.sa_data[13];
 
             perf_submit_wrapper(ctx, direction, args.buf, count, conn_info, event)?;
         }
@@ -314,7 +329,7 @@ fn perf_submit_buf(
     Ok(0)
 }
 
-#[kprobe(name = "entry_write")]
+#[uprobe(name = "entry_write")]
 pub fn entry_write(ctx: ProbeContext) -> u32 {
     match try_entry_write(ctx) {
         Ok(ret) => ret,
@@ -322,7 +337,7 @@ pub fn entry_write(ctx: ProbeContext) -> u32 {
     }
 }
 
-#[kretprobe(name = "exit_write")]
+#[uretprobe(name = "exit_write")]
 pub fn exit_write(ctx: ProbeContext) -> u32 {
     match try_exit_write(ctx) {
         Ok(ret) => ret,
@@ -367,7 +382,7 @@ fn try_exit_write(ctx: ProbeContext) -> Result<u32, u32> {
     Ok(0)
 }
 
-#[kprobe(name = "entry_close")]
+#[uprobe(name = "entry_close")]
 pub fn entry_close(ctx: ProbeContext) -> u32 {
     match try_entry_close(ctx) {
         Ok(ret) => ret,
@@ -375,7 +390,7 @@ pub fn entry_close(ctx: ProbeContext) -> u32 {
     }
 }
 
-#[kretprobe(name = "exit_close")]
+#[uretprobe(name = "exit_close")]
 pub fn exit_close(ctx: ProbeContext) -> u32 {
     match try_exit_close(ctx) {
         Ok(ret) => ret,

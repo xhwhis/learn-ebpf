@@ -163,27 +163,17 @@ void execute(get_data_fn_t fn)
     // Drop the future when finished or canceled.
     (fut.drop)(fut.fut);
 
-    if (ret.value.attr.sock_addr.sa_family == AF_INET)
-    {
-        char str[INET_ADDRSTRLEN];
-        struct sockaddr_in *sin = (struct sockaddr_in *)&ret.value.attr.sock_addr;
-        inet_ntop(AF_INET, &(sin->sin_addr), str, INET_ADDRSTRLEN);
-        printf("IP: %s\n", str);
-    }
-    else if (ret.value.attr.sock_addr.sa_family == AF_INET6)
-    {
-        char str[INET6_ADDRSTRLEN];
-        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&ret.value.attr.sock_addr;
-        inet_ntop(AF_INET6, &(sin6->sin6_addr), str, INET6_ADDRSTRLEN);
-        printf("IP: %s\n", str);
-    }
+    char str[INET_ADDRSTRLEN];
+    struct sockaddr_in *sin = (struct sockaddr_in *)&ret.value.attr.sock_addr;
+    inet_ntop(AF_INET, &(sin->sin_addr), str, INET_ADDRSTRLEN);
+    printf("sa_family: %hu\taddr: %s:%hu\n", ret.value.attr.sock_addr.sa_family, str, ntohs(sin->sin_port));
 
     if (ret.value.attr.msg_size < MAX_MSG_SIZE)
     {
         ret.value.msg[ret.value.attr.msg_size] = '\0';
     }
     char *payload = &ret.value.msg[ret.value.attr.pos];
-    printf("payload: %s\npid: %u fd: %d timestamp: %ld\n", payload, ret.value.attr.conn_id.pid, ret.value.attr.conn_id.fd, ret.value.attr.timestamp_ns);
+    printf("pid: %u\tfd: %d\ttimestamp: %ld\npayload: %s\n", ret.value.attr.conn_id.pid, ret.value.attr.conn_id.fd, ret.value.attr.timestamp_ns, payload);
 }
 
 int main(int argc, char const **argv)
